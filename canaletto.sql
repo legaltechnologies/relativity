@@ -210,6 +210,61 @@ DROP TABLE #tree2
 
 
 
+;WITH CTEHierarchy
+AS (
+  SELECT
+    d.ControlNumber
+   ,d.ControlNumber AS Tree
+   ,0 AS Level
+   ,d.ParentID
+   ,d.GroupIdentifier
+  FROM [EDDSDBO].[Document] d
+  JOIN @prod p ON d.[ArtifactID] = p.[ArtifactID] 
+  UNION ALL
+  SELECT
+    uh.ControlNumber
+   ,dx.ControlNumber as Tree
+   ,uh.Level + 1 AS Level
+   ,CASE WHEN dx.ParentID = dx.ControlNumber THEN NULL ELSE dx.ParentID END ParentID
+   ,uh.GroupIdentifier
+  FROM [EDDSDBO].[Document] dx
+  INNER JOIN CTEHierarchy uh ON dx.ControlNumber = uh.ParentID 
+  )
+
+-- Set Production Group Identifier (make orphans into their own families)
+SELECT
+  t.ControlNumber
+ ,t.Tree
+ ,t.Level
+ ,t.ParentID
+ ,t.GroupIdentifier
+INTO #tree3
+FROM CTEHierarchy t
+JOIN @prod p ON t.Tree = p.ControlNumber
+WHERE p.[Skip] IS NULL
+ORDER BY ControlNumber, Tree, ParentID, GroupIdentifier
+
+UPDATE p
+  SET ProdGI = t.Tree
+FROM #tree3 t
+JOIN (
+	SELECT
+	  [ControlNumber]
+	 ,MAX(Level) [deepend]
+	FROM #tree3
+	GROUP BY [ControlNumber]
+	) x ON t.[ControlNumber] = x.[ControlNumber] AND t.[Level] = x.[deepend]
+JOIN @prod p ON t.ControlNumber = p.ControlNumber
+
+DROP TABLE #tree3
+
+-- Set Production Sort Date based on remaining items
+UPDATE p 
+  SET ProdSD = d.KeyDate
+FROM @prod p 
+JOIN [eddsdbo].[Document] d ON p.ProdGI = d.ControlNumber
+
+
 -- Show me the money
 SELECT
   d.[ControlNumber]
@@ -245,7 +300,6 @@ LEFT JOIN [EDDSDBO].[Code] ft ON ftx.[CodeArtifactID] = ft.[ArtifactID]
 
 
 
--- Scratchpad starts here
 
 /*
 INSERT INTO @rpf
@@ -327,5 +381,3 @@ SELECT
 FROM [EDDSDBO].[Field]
 WHERE [FieldCategoryID] = 12
 */
-
-
