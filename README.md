@@ -1,1 +1,1 @@
-# Collection of Relativity scripts (in SQL and Relativity Script)
+# Collection of Relativity scripts (in SQL, Relativity Script and PowerShell)
