@@ -209,7 +209,48 @@ WHERE p.Placeholder IS NULL
 DROP TABLE #tree2
 
 
+-- Warn about children of skipped documents that are not placeholders
+;WITH CTEHierarchy
+AS (
+  SELECT
+    d.ControlNumber
+   ,d.ControlNumber AS Tree
+   ,0 AS Level
+   ,ParentID
+   ,GroupIdentifier
+  FROM [EDDSDBO].[Document] d
+  JOIN @prod p ON d.[ArtifactID] = p.[ArtifactID] AND (p.[Skip] = 1)
+  UNION ALL
+  SELECT
+    dx.ControlNumber
+   ,dx.ControlNumber as Tree
+   ,uh.Level + 1 AS Level
+   ,dx.ParentID
+   ,uh.GroupIdentifier
+  FROM [EDDSDBO].[Document] dx
+  INNER JOIN CTEHierarchy uh ON uh.ControlNumber = dx.ParentID AND dx.ControlNumber <> dx.ParentID --AND uh.ControlNumber <> dx.ControlNumber
+  )
+  
+SELECT
+  ControlNumber
+ ,Tree
+ ,Level
+ ,ParentID
+ ,GroupIdentifier
+INTO #tree4
+FROM CTEHierarchy
+ORDER BY ControlNumber, Tree, ParentID, GroupIdentifier
 
+UPDATE p
+SET Warning = CASE WHEN Warning IS NULL THEN 'Skipped parent' ELSE Warning + '; Skipped parent' END
+FROM #tree4 x 
+JOIN @prod p ON x.Tree = p.ControlNumber
+WHERE p.Skip IS NULL
+
+DROP TABLE #tree4
+
+
+-- Set Production Group Identifier (make orphans into their own families)
 ;WITH CTEHierarchy
 AS (
   SELECT
@@ -231,7 +272,6 @@ AS (
   INNER JOIN CTEHierarchy uh ON dx.ControlNumber = uh.ParentID 
   )
 
--- Set Production Group Identifier (make orphans into their own families)
 SELECT
   t.ControlNumber
  ,t.Tree
@@ -263,6 +303,46 @@ UPDATE p
   SET ProdSD = d.KeyDate
 FROM @prod p 
 JOIN [eddsdbo].[Document] d ON p.ProdGI = d.ControlNumber
+
+
+
+-- Delete duplicate families (e.g. created by breaking families after skipping parents)
+SELECT
+  d.[MD5Hash]
+INTO #dhash
+FROM @prod p
+JOIN [eddsdbo].[Document] d ON p.[ArtifactID] = d.[ArtifactID]
+WHERE p.[Skip] IS NULL AND p.[ControlNumber] = p.[ProdGI]
+GROUP BY d.[MD5Hash]
+HAVING COUNT(DISTINCT p.[ArtifactID]) > 1
+
+SELECT
+  p.[ProdGI]
+ ,h.[MD5Hash]
+INTO #dupef
+FROM @prod p
+JOIN [eddsdbo].[Document] d ON p.[ArtifactID] = d.[ArtifactID]
+JOIN #dhash h ON d.[MD5Hash] = h.[MD5Hash]
+WHERE p.[ControlNumber] = p.[ProdGI]
+
+DELETE f
+FROM #dupef f
+WHERE f.[ProdGI] IN
+	(SELECT
+	  MIN([ProdGI])
+	FROM #dupef f
+	GROUP BY [MD5Hash])
+
+UPDATE p
+SET Skip = 1
+  ,Warning = CASE WHEN Warning IS NULL THEN 'Duplicate family' ELSE Warning + '; Duplicate family' END
+FROM #dupef x 
+JOIN @prod p ON x.[ProdGI] = p.[ProdGI]
+WHERE p.Skip IS NULL
+
+DROP TABLE #dupef
+DROP TABLE #dhash
+
 
 
 -- Show me the money
@@ -381,3 +461,5 @@ SELECT
 FROM [EDDSDBO].[Field]
 WHERE [FieldCategoryID] = 12
 */
+
+
